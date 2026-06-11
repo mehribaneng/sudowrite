@@ -56,6 +56,10 @@ npm run lint
 npx expo export --platform ios
 ```
 
+## Demo
+
+https://github.com/user-attachments/assets/6547a2c1-4901-4341-b3ac-82bdb0bc1bf2
+
 ## Product decisions
 
 - **Review before mutation.** AI output is never written directly into the
