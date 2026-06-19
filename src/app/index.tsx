@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { KeyboardAvoidingView, Platform, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -6,16 +7,39 @@ import { DiffSheet } from "@/components/DiffSheet";
 import { Editor } from "@/components/Editor";
 import { StatusText } from "@/components/StatusText";
 import { ThemedView } from "@/components/ui/themed-view";
+import { DocumentProvider, useDocument } from "@/providers/DocumentProvider";
 import { useStore } from "@/store/useStore";
 
-export default function HomeScreen() {
-  const content = useStore((state) => state.content);
+function ScribeScreen() {
+  const { content, isReady, updateText, applyEditIfCurrent } = useDocument();
   const workflow = useStore((state) => state.workflow);
   const pendingEdit = useStore((state) => state.pendingEdit);
   const transcribedCommand = useStore((state) => state.transcribedCommand);
-  const setContent = useStore((state) => state.setContent);
-  const applyPendingEdit = useStore((state) => state.applyPendingEdit);
-  const rejectPendingEdit = useStore((state) => state.rejectPendingEdit);
+  const clearPendingEdit = useStore((state) => state.clearPendingEdit);
+  const setError = useStore((state) => state.setError);
+
+  useEffect(() => {
+    if (pendingEdit && content !== pendingEdit.original) {
+      clearPendingEdit();
+      setError("The document changed. Run the AI edit again.");
+    }
+  }, [clearPendingEdit, content, pendingEdit, setError]);
+
+  const applyPendingEdit = () => {
+    if (!pendingEdit) {
+      return;
+    }
+
+    const applied = applyEditIfCurrent(
+      pendingEdit.original,
+      pendingEdit.edited,
+    );
+    clearPendingEdit();
+
+    if (!applied) {
+      setError("The document changed. Run the AI edit again.");
+    }
+  };
 
   return (
     <ThemedView style={styles.screen}>
@@ -31,8 +55,10 @@ export default function HomeScreen() {
 
           <Editor
             content={content}
-            editable={workflow === "idle" && pendingEdit === null}
-            onChangeText={setContent}
+            editable={
+              isReady && workflow === "idle" && pendingEdit === null
+            }
+            onChangeText={updateText}
           />
 
           <DiffSheet
@@ -40,11 +66,19 @@ export default function HomeScreen() {
             diff={pendingEdit?.diff ?? []}
             visible={pendingEdit !== null}
             onApply={applyPendingEdit}
-            onReject={rejectPendingEdit}
+            onReject={clearPendingEdit}
           />
         </KeyboardAvoidingView>
       </SafeAreaView>
     </ThemedView>
+  );
+}
+
+export default function HomeScreen() {
+  return (
+    <DocumentProvider>
+      <ScribeScreen />
+    </DocumentProvider>
   );
 }
 

@@ -11,25 +11,28 @@ reject the edit.
 
 - Node.js and npm
 - An iPhone running a version supported by Expo SDK 56
-- An [OpenRouter](https://openrouter.ai/) API key
 - The Expo Go app installed on the iPhone
+- The Scribe NestJS and Hocuspocus backend running
 
-Install dependencies and configure the API key:
+Install dependencies and configure the backend connection:
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Set the key in `.env`:
+For an iOS simulator, `.env` can use:
 
-```bash
-EXPO_PUBLIC_OPENROUTER_KEY=your_openrouter_key
+```dotenv
+EXPO_PUBLIC_API_BASE_URL=http://localhost:3000/api/v1
+EXPO_PUBLIC_COLLABORATION_URL=ws://localhost:1234
+EXPO_PUBLIC_DOCUMENT_ID=default-document
 ```
 
-`EXPO_PUBLIC_*` values are embedded in the client bundle. This is acceptable
-for this no-server prototype, but it does not protect the key. A production
-version should proxy OpenRouter requests through a trusted backend.
+On a physical iPhone, replace `localhost` with the development machine's LAN
+IP. `EXPO_PUBLIC_*` values are embedded in the client bundle and must contain
+only public connection configuration. The OpenRouter key belongs exclusively
+to the backend.
 
 ### Run with Expo Go
 
@@ -89,36 +92,40 @@ src/
 ├── app/                 # Expo Router entry and single screen
 ├── components/          # Editor, recording controls, status, and diff sheet
 ├── components/ui/       # Shared themed text and view primitives
-├── constants/           # Sample document and theme tokens
+├── constants/           # Public connection config and theme tokens
 ├── hooks/               # Color scheme and theme access
-├── lib/                 # OpenRouter client, API operations, and diff utility
-└── store/               # Single Zustand store
+├── lib/                 # Backend API, Yjs text operations, and diff utility
+├── providers/           # Y.Doc and Hocuspocus connection lifecycle
+└── store/               # Transient Zustand workflow state
 ```
 
 ### Editor and synchronization model
 
-The editor uses a controlled React Native `TextInput`. Zustand holds the
-authoritative in-memory document string, so typing updates the store
-immediately and the rendered editor always reflects the same value.
+The editor uses a controlled React Native `TextInput`, but `Y.Text("content")`
+is the authoritative document. A Hocuspocus provider synchronizes its `Y.Doc`
+with the backend, and a Yjs observer projects the current text into React for
+rendering. Zustand stores only transient workflow state.
+
+Local `TextInput` values are reduced to their smallest changed range and
+committed as one Yjs insert/delete transaction. Remote Yjs updates pass through
+the same observer, so a second client can merge edits without replacing the
+whole document or using last-write-wins persistence.
 
 When recording stops, the current document is captured as a snapshot. That
-snapshot and the transcription are sent to the editing model. The returned
-document is compared with the snapshot using `diffWords`, then stored
+snapshot and the transcription are sent to the backend. The returned document
+is compared with the snapshot using `diffWords`, then stored
 separately as `pendingEdit`.
 
 This creates a small two-phase commit:
 
 1. **Propose:** preserve the current document and display the edited text as a
    diff.
-2. **Resolve:** Apply atomically replaces the document with
-   `pendingEdit.edited`; Reject discards the pending edit without changing the
-   document.
+2. **Resolve:** Apply converts the approved character diff into granular Yjs
+   operations; Reject performs no document transaction.
 
-The editor is disabled while recording or processing, preventing local typing
-from racing with the document snapshot sent to the model. There is no
-background synchronization, persistence, collaborative state, or optimistic
-server update. The Zustand store is the only source of truth for the current
-session.
+The submitted snapshot is checked when the AI response arrives and again when
+Apply is tapped. If local or remote content changed in the meantime, the stale
+proposal is discarded instead of overwriting the newer shared document.
 
 ### Audio and AI pipeline
 
@@ -128,22 +135,24 @@ session.
 idle -> recording -> processing -> diff review -> apply or reject
 ```
 
-`expo-audio` records with the high-quality preset. `expo-file-system` converts
-the recording to base64, and OpenRouter performs transcription with
-`openai/whisper-large-v3`. The resulting instruction and document snapshot are
-sent to `anthropic/claude-sonnet-4.6`, which is prompted to return only the full
-edited document.
+`expo-audio` records with the high-quality preset. The recording is uploaded as
+multipart form data to the NestJS transcription endpoint. The resulting
+instruction and current document snapshot are sent to the backend edit
+endpoint, which returns a complete proposed document.
 
-Axios is configured once in `src/lib/openrouter.ts`. The shared client owns the
-base URL, timeout, JSON headers, and authorization interceptor. `src/lib/api.ts`
-owns endpoint payloads, response validation, and user-facing error
-normalization.
+`src/lib/api.ts` owns backend endpoint payloads, response validation, timeouts,
+and user-facing error normalization. No OpenRouter credentials are present in
+the frontend source or example configuration.
 
-### Known limitation: conflict-free server sync
+### Conflict-free server sync
 
-The task requested a conflict-free architecture, such as Yjs, with server
-persistence. This prototype does not implement that requirement. Given the test task's two-hour limit, the implementation prioritizes the complete recording, transcription, diff review, and Apply/Reject workflow. Adding Yjs superficially while continuing to replace the entire document string
-would not provide meaningful conflict-free editing.
+The app bootstraps a configured document through NestJS, then connects one
+`Y.Doc` to the Hocuspocus WebSocket server. Hocuspocus persists Yjs state in the
+backend database. Temporary disconnects do not destroy the provider, allowing
+in-memory local operations to synchronize after reconnecting.
+
+The backend contract and scaling considerations are documented in
+[`docs/nestjs-yjs-backend-handoff.md`](docs/nestjs-yjs-backend-handoff.md).
 
 ## AI-assisted development
 
@@ -163,5 +172,5 @@ Manual review also corrected two important areas:
   Dynamic Type layout issues were found through simulator testing and fixed.
 - **API integration:** the original `expo-av` and multipart assumptions were
   updated to Expo SDK 56's `expo-audio` API and OpenRouter's current base64 JSON
-  transcription contract. Fetch calls were later consolidated behind a typed
-  Axios client with explicit validation and errors.
+  transcription contract. The final architecture moved all OpenRouter access
+  behind the NestJS backend and added Hocuspocus/Yjs synchronization.

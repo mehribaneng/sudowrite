@@ -7,6 +7,7 @@ import {
 import { ActivityIndicator, Pressable, StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/ui/themed-text";
+import { useDocument } from "@/providers/DocumentProvider";
 import { computeDiff } from "@/lib/diff";
 import { useStore } from "@/store/useStore";
 import {
@@ -17,8 +18,9 @@ import {
 
 export function ControlBar() {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const { connectionStatus, documentId, getCurrentText, isReady } =
+    useDocument();
 
-  const content = useStore((state) => state.content);
   const workflow = useStore((state) => state.workflow);
   const pendingEdit = useStore((state) => state.pendingEdit);
   const setWorkflow = useStore((state) => state.setWorkflow);
@@ -27,6 +29,9 @@ export function ControlBar() {
   );
   const setPendingEdit = useStore((state) => state.setPendingEdit);
   const setError = useStore((state) => state.setError);
+  const isRecording = workflow === "recording";
+  const isProcessing = workflow === "processing";
+  const canStartRecording = isReady && connectionStatus === "connected";
 
   if (pendingEdit !== null) {
     return null;
@@ -34,6 +39,10 @@ export function ControlBar() {
 
   const startRecording = async () => {
     try {
+      if (!canStartRecording) {
+        throw new Error("Wait for the document to connect before dictating.");
+      }
+
       setError(null);
       setTranscribedCommand("");
 
@@ -58,8 +67,6 @@ export function ControlBar() {
   };
 
   const stopRecording = async () => {
-    const originalContent = content;
-
     try {
       await recorder.stop();
       await setAudioModeAsync({
@@ -76,8 +83,27 @@ export function ControlBar() {
       const command = await transcribeAudio(audioUri);
       setTranscribedCommand(command);
 
-      const edited = await applyEditInstruction(originalContent, command);
+      if (connectionStatus !== "connected") {
+        throw new Error("Reconnect to the document and try the AI edit again.");
+      }
+
+      const originalContent = getCurrentText();
+      if (!documentId) {
+        throw new Error("The document is not ready.");
+      }
+
+      const edited = await applyEditInstruction(
+        documentId,
+        originalContent,
+        command,
+      );
+
+      if (getCurrentText() !== originalContent) {
+        throw new Error("The document changed. Run the AI edit again.");
+      }
+
       setPendingEdit({
+        original: originalContent,
         edited,
         diff: computeDiff(originalContent, edited),
       });
@@ -93,20 +119,18 @@ export function ControlBar() {
     }
   };
 
-  const isRecording = workflow === "recording";
-  const isProcessing = workflow === "processing";
-
   return (
     <View style={styles.container}>
       <Pressable
         accessibilityLabel={isRecording ? "Stop recording" : "Start recording"}
         accessibilityRole="button"
-        disabled={isProcessing}
+        disabled={isProcessing || (!isRecording && !canStartRecording)}
         onPress={isRecording ? stopRecording : startRecording}
         style={({ pressed }) => [
           styles.micButton,
           isRecording && styles.stopButton,
-          isProcessing && styles.disabled,
+          (isProcessing || (!isRecording && !canStartRecording)) &&
+            styles.disabled,
           pressed && !isProcessing && styles.pressed,
         ]}
       >

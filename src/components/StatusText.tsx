@@ -4,6 +4,7 @@ import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/ui/themed-text";
 import { useTheme } from "@/hooks/use-theme";
+import { useDocument } from "@/providers/DocumentProvider";
 import { useStore } from "@/store/useStore";
 
 type StatusIcon = {
@@ -14,6 +15,7 @@ type StatusIcon = {
 
 export function StatusText() {
   const theme = useTheme();
+  const { connectionStatus, isReady } = useDocument();
   const workflow = useStore((state) => state.workflow);
   const command = useStore((state) => state.transcribedCommand);
   const error = useStore((state) => state.error);
@@ -38,6 +40,21 @@ export function StatusText() {
     icon = {
       name: "exclamationmark.triangle.fill",
       color: theme.error,
+    };
+  } else if (connectionStatus === "disconnected") {
+    message = isReady
+      ? "Offline. Changes will sync when reconnected."
+      : "Could not connect to the document server.";
+    icon = {
+      name: "wifi.slash",
+      color: theme.error,
+    };
+  } else if (!isReady) {
+    message = "Connecting to your document...";
+    icon = {
+      name: "network",
+      color: "#8f6b43",
+      animated: true,
     };
   } else if (workflow === "recording") {
     message = "Listening... Tap the button again to stop.";
